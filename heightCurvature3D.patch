@@ -1,0 +1,568 @@
+1 patch for repository http://patch-tag.com/r/popinet/gerris-devel:
+
+Wed Jun 25 15:47:25 EDT 2014  Tim Langlois <trl54@cornell.edu>
+  * Height function curvature in 3D
+  
+  An implementation of height function normals and curvature in 3D.
+
+New patches:
+
+[Height function curvature in 3D
+Tim Langlois <trl54@cornell.edu>**20140625194725
+ Ignore-this: 5ef6d650d8ba871e3600749788b52a7e
+ 
+ An implementation of height function normals and curvature in 3D.
+] hunk ./src/vof.c 2644
+ }
+ 
+ /* Returns: the height @h of the neighboring column in direction @d or
+-   GFS_NODATA if it is undefined. Also fills @x with the coordinates
+-   of the cell (3/4, 1 or 3/2 depending on its relative level). */
++   GFS_NODATA if it is undefined. Also fills @x (and @y in 3D) with the coordinates
++   of the cell (0, 1/4, 1/2, 3/4, 1 or 3/2 depending on its relative level and position). */
+ static gdouble neighboring_column (FttCell * cell, 
+ 				   GfsVariable * h, FttComponent c, gdouble orientation,
+hunk ./src/vof.c 2648
+-				   FttDirection d, gdouble * x)
++				   FttDirection d, gdouble * x
++#ifndef FTT_2D
++                   , gdouble * y
++#endif
++                   )
+ {
+   FttCell * n = ftt_cell_neighbor (cell, d);
+   if (!n)
+hunk ./src/vof.c 2657
+     return GFS_NODATA;
++
++#ifndef FTT_2D
++  FttComponent dc = d/2;
++  FttComponent oc = FTT_ORTHOGONAL_COMPONENT (c);
++  if (oc == dc)
++      oc = FTT_ORTHOGONAL_COMPONENT (oc);
++#endif
+   if (ftt_cell_level (cell) == ftt_cell_level (n)) {
+     if (GFS_HAS_DATA (n, h)) {
+       *x = 1.;
+hunk ./src/vof.c 2667
++#ifndef FTT_2D
++      *y = 0.;
++#endif
+       return GFS_VALUE (n, h);
+     }
+     else if (FTT_CELL_IS_LEAF (n))
+hunk ./src/vof.c 2682
+ 	FttVector p;
+ 	ftt_cell_relative_pos (child.c[i], &p);
+ 	*x = 3./4.;
++#ifndef FTT_2D
++    *y = (&p.x)[oc] > 0 ? 1./4.:-1./4.;
++#endif
+ 	return GFS_VALUE (child.c[i], h)/2. + orientation*(&p.x)[c];
+       }
+     return GFS_NODATA;
+hunk ./src/vof.c 2694
+     FttVector p;
+     ftt_cell_relative_pos (cell, &p);
+     *x = 3./2.;
++#ifndef FTT_2D
++    *y = (&p.x)[oc] > 0 ? -1./2.:1./2.;
++#endif
++    return (GFS_VALUE (n, h) - orientation*(&p.x)[c])*2.;
++  }
++  return GFS_NODATA;
++}
++
++/* Returns: the height @h of the neighboring corner column in direction @u,@v or
++   GFS_NODATA if it is undefined. Also fills @x and @y with the coordinates
++   of the cell (1/2, 3/4, 1 or 3/2 depending on its relative level and position). */
++static gdouble neighboring_corner_column (FttCell * cell,
++				   GfsVariable * h, FttComponent c, gdouble orientation,
++				   FttDirection u, FttDirection v,
++				   gdouble * x, gdouble * y)
++{
++  FttCell * n1 = ftt_cell_neighbor (cell, u);
++  if (!n1)
++    return GFS_NODATA;
++
++  FttVector p;
++  ftt_cell_relative_pos (cell, &p);
++
++  FttComponent uc = u/2;
++  FttComponent vc = v/2;
++
++  if (ftt_cell_level (cell) != ftt_cell_level (n1)) {
++    /* coarser neighbor, n might be n1 depending on orientation */
++    gdouble flip = v % 2 ? -1 : 1;
++    if ((&p.x)[vc] * flip < 0) {
++      if (GFS_HAS_DATA (n1, h)) {
++        *x = 3./2.;
++        *y = 1./2.;
++
++        return (GFS_VALUE (n1, h) - orientation*(&p.x)[c])*2.;
++      }
++
++      return GFS_NODATA;
++    }
++  }
++
++  FttCell * n = ftt_cell_neighbor (n1, v);
++  if (!n)
++    return GFS_NODATA;
++
++  if (ftt_cell_level (cell) == ftt_cell_level (n)) {
++    if (GFS_HAS_DATA (n, h)) {
++      *x = 1.;
++      *y = 1.;
++
++      return GFS_VALUE (n, h);
++    }
++    else if (FTT_CELL_IS_LEAF (n))
++      return GFS_NODATA;
++
++    /* check finer neighbors */
++    FttDirection directions[FTT_DIMENSION];
++    directions[uc] = FTT_OPPOSITE_DIRECTION (u);
++    directions[vc] = FTT_OPPOSITE_DIRECTION (v);
++
++    int cur_dir;
++    for (cur_dir = 2 * c; cur_dir <= 2 * c + 1; ++cur_dir) {
++      directions[c] = cur_dir;
++
++      FttCell * neighbor = ftt_cell_child_corner (n, directions);
++      if (neighbor && GFS_HAS_DATA (neighbor, h)) {
++        *x = 3./4.;
++        *y = 3./4.;
++
++        /*FttVector p;*/
++        ftt_cell_relative_pos (neighbor, &p);
++        return GFS_VALUE (neighbor, h)/2. + orientation*(&p.x)[c];
++      }
++    }
++
++    return GFS_NODATA;
++  }
++  else if (GFS_HAS_DATA (n, h)) {
++    /* coarser neighbor with data */
++
++    gdouble flip = u % 2 ? -1 : 1;
++    *x = (&p.x)[uc] * flip > 0 ? 3./2.:1./2.;
++    *y = 3./2.;
++
+     return (GFS_VALUE (n, h) - orientation*(&p.x)[c])*2.;
+   }
+hunk ./src/vof.c 2780
++  else if (!FTT_CELL_IS_LEAF (n)) {
++    /* Not a leaf, check finer neighbors */
++    FttDirection directions[FTT_DIMENSION];
++    gdouble flip = u % 2 ? -1 : 1;
++    directions[uc] = (&p.x)[uc] * flip < 0 ? u : FTT_OPPOSITE_DIRECTION (u);
++    directions[vc] = FTT_OPPOSITE_DIRECTION (v);
++
++    directions[c] = (&p.x)[c] > 0 ? 2 * c : 2 * c + 1;
++
++    FttCell * neighbor = ftt_cell_child_corner (n, directions);
++    if (neighbor && GFS_HAS_DATA (neighbor, h)) {
++      *x = 1.;
++      *y = 1.;
++
++      return GFS_VALUE (neighbor, h);
++    }
++  }
++
+   return GFS_NODATA;
+ }
+ 
+hunk ./src/vof.c 2801
++static void collect_height_neighbors (FttCell *cell, GfsVariable *hv,
++                                      FttComponent c, gdouble orientation,
++                                      gdouble x[9], gdouble y[9], gdouble h[9])
++{
++#ifdef FTT_2D
++  g_assert_not_implemented ();
++#else
++  FttComponent u = FTT_ORTHOGONAL_COMPONENT (c);
++  FttComponent v = FTT_ORTHOGONAL_COMPONENT (u);
++  FttDirection LEFT = 2*u+1;
++  FttDirection RIGHT = 2*u;
++  FttDirection UP = 2*v;
++  FttDirection DOWN = 2*v+1;
++
++  int i;
++  for (i = 0; i < 9; ++i)
++  {
++    x[i] = GFS_NODATA;
++    y[i] = GFS_NODATA;
++    h[i] = GFS_NODATA;
++  }
++
++  gboolean found[4];
++  for (i = 0; i < 4; ++i)
++  {
++    found[i] = FALSE;
++  }
++
++  h[8] = GFS_VALUE (cell, hv);
++  x[8] = 0.;
++  y[8] = 0.;
++
++  FttVector cp;
++  ftt_cell_pos (cell, &cp);
++
++  /* neighbors */
++  h[0] = neighboring_column (cell, hv, c, orientation, RIGHT, &x[0], &y[0]);
++  if (y[0] == 1./2.) {
++    found[3] = TRUE;
++  }
++  else if (y[0] == -1./2.) {
++    found[0] = TRUE;
++  }
++
++  h[2] = neighboring_column (cell, hv, c, orientation, DOWN, &y[2], &x[2]);
++  y[2] = -y[2];
++  if (x[2] == 1./2.) {
++    found[0] = TRUE;
++  }
++  else if (x[2] == -1./2.) {
++    found[1] = TRUE;
++  }
++
++  h[4] = neighboring_column (cell, hv, c, orientation, LEFT, &x[4], &y[4]);
++  x[4] = -x[4];
++  if (y[4] == 1./2.) {
++    found[2] = TRUE;
++  }
++  else if (y[4] == -1./2.) {
++    found[1] = TRUE;
++  }
++
++  h[6] = neighboring_column (cell, hv, c, orientation, UP, &y[6], &x[6]);
++  if (x[6] == 1./2.) {
++    found[3] = TRUE;
++  }
++  else if (x[6] == -1./2.) {
++    found[2] = TRUE;
++  }
++
++  /* corners */
++  if (!found[0]) {
++    h[1] = neighboring_corner_column (cell, hv, c, orientation, RIGHT, DOWN, &x[1], &y[1]);
++    y[1] = -y[1];
++  }
++
++  if (!found[1]) {
++    h[3] = neighboring_corner_column (cell, hv, c, orientation, LEFT, DOWN, &x[3], &y[3]);
++    x[3] = -x[3];
++    y[3] = -y[3];
++  }
++
++  if (!found[2]) {
++    h[5] = neighboring_corner_column (cell, hv, c, orientation, LEFT, UP, &x[5], &y[5]);
++    x[5] = -x[5];
++  }
++
++  if (!found[3]) {
++    h[7] = neighboring_corner_column (cell, hv, c, orientation, RIGHT, UP, &x[7], &y[7]);
++  }
++#endif
++}
++
+ static void curvature_from_h (FttCell * cell, GfsDomain * domain,
+ 			      gdouble x[3], gdouble h[3],
+ 			      gdouble orientation, FttComponent c,
+hunk ./src/vof.c 2925
+   }
+ }
+ 
++/* Currently this assumes uniform grid spacing for all samples. */
++static void curvature_from_h_3D (FttCell * cell,
++                  gdouble x[9], gdouble y[9], gdouble h[9],
++                  gdouble orientation, FttComponent c,
++                  gdouble * kappa, gdouble * kmax)
++{
++  gdouble size = ftt_cell_size (cell);
++  gdouble hx, hy, hxx, hyy, hxy;
++
++  hx = (h[0] - h[4]) / 2.;
++  hy = (h[6] - h[2]) / 2.;
++  gdouble tmp = 2. * h[8];
++  hxx = (h[0] - tmp + h[4]);
++  hyy = (h[6] - tmp + h[2]);
++  hxy = (h[7] - h[1] - h[5] + h[3]) / 4.;
++
++  gdouble dnm = 1 + hx*hx + hy*hy;
++  *kappa = (hyy + hx*hx*hyy - 2*hx*hy*hxy + hxx + hy*hy*hxx) / (size*sqrt(dnm*dnm*dnm));
++  if (kmax) {
++    gdouble kg = (hxx*hyy - hxy*hxy)/(dnm*dnm);
++    gdouble a = (*kappa)*(*kappa)/4. - kg;
++    *kmax = fabs (*kappa/2.);
++    if (a >= 0.)
++      *kmax += sqrt (a);
++  }
++}
++
+ /**
+  * gfs_curvature_along_direction:
+  * @cell: a #FttCell.
+hunk ./src/vof.c 2997
+     }
+   }
+ #else /* 3D */
+-  g_assert_not_implemented ();
++  gdouble orientation;
++  GfsVariable * hv = gfs_closest_height (cell, t, c, &orientation);
++  if (!hv) {
++    return FALSE;
++  }
++  else if (fabs (GFS_VALUE (cell, hv)) > 1.)
++    return FALSE; /* interface is too far */
++
++  gdouble x[9], y[9], h[9];
++  collect_height_neighbors (cell, hv, c, orientation, x, y, h);
++
++  int i;
++  gboolean good = TRUE;
++  for (i = 0; i < 9 && good; ++i) {
++    if ( (fabs(x[i]) != 1. && x[i] != 0.) || (fabs(y[i]) != 1. && y[i] != 0.) || h[i] == GFS_NODATA) {
++      good = FALSE;
++    }
++  }
++
++  if (good)
++  {
++    /* compute curvature */
++    curvature_from_h_3D (cell, x, y, h, orientation, c, kappa, kmax);
++    return TRUE;
++  }
+ #endif /* 3D */
+ 
+   return FALSE;
+hunk ./src/vof.c 3072
+     return FALSE;
+   }
+ #else /* 3D */
+-  g_assert_not_implemented ();
++  gdouble orientation;
++  GfsVariable * hv = gfs_closest_height (cell, t, c, &orientation);
++  FttComponent u = FTT_ORTHOGONAL_COMPONENT (c);
++  FttComponent v = FTT_ORTHOGONAL_COMPONENT (u);
++  if (!hv) {
++    /* no data for either directions, look "right", "left", "up", and "down" to
++       collect potential interface positions */
++    hv = gfs_closest_height (ftt_cell_neighbor (cell, 2*u), t, c, &orientation);
++    if (!hv)
++      hv = gfs_closest_height (ftt_cell_neighbor (cell, 2*u + 1), t, c, &orientation);
++    if (!hv)
++      hv = gfs_closest_height (ftt_cell_neighbor (cell, 2*v), t, c, &orientation);
++    if (!hv)
++      hv = gfs_closest_height (ftt_cell_neighbor (cell, 2*v+1), t, c, &orientation);
++    if (!hv) /* give up */
++      return FALSE;
++  }
++  else if (fabs (GFS_VALUE (cell, hv)) > 1.)
++    return FALSE; /* interface is too far */
++
++  gdouble x[9], y[9], h[9];
++  collect_height_neighbors (cell, hv, c, orientation, x, y, h);
++
++  int i;
++  gboolean good = TRUE;
++  for (i = 0; i < 9 && good; ++i) {
++    if ( (fabs(x[i]) != 1. && x[i] != 0.) || (fabs(y[i]) != 1. && y[i] != 0.) || h[i] == GFS_NODATA) {
++      good = FALSE;
++    }
++  }
++
++  if (good)
++  {
++    /* compute curvature */
++    curvature_from_h_3D (cell, x, y, h, orientation, c, kappa, kmax);
++    return TRUE;
++  }
++  else
++  {
++    /* collect interface positions */
++    for (i = 0; i < 9; ++i)
++    {
++      if (h[i] != GFS_NODATA && x[i] != GFS_NODATA && y[i] != GFS_NODATA)
++      {
++        interface[*nb][u] = x[i];
++        interface[*nb][v] = y[i];
++        interface[(*nb)++][c] = orientation * h[i];
++      }
++    }
++
++    return FALSE;
++  }
++
+ #endif /* 3D */
+ 
+   return FALSE;
+hunk ./src/vof.c 3745
+     }
+   }
+ #else /* 3D */
+-  g_assert_not_implemented ();
++  GfsVariableTracerVOFHeight * t = GFS_VARIABLE_TRACER_VOF_HEIGHT (v);
++  FttComponent c;
++  m->x = 0.;
++  m->y = 1.;
++  m->z = 0.;
++
++  for (c = 0.; c < 3; c++) {
++    gdouble orientation;
++    GfsVariable * hv = gfs_closest_height (cell, t, c, &orientation);
++
++    if (hv != NULL && fabs (GFS_VALUE (cell, hv)) <= 1.) {
++      /* Gather surrounding positions */
++      gdouble x[2], y[2], h[2];
++
++      FttComponent u = FTT_ORTHOGONAL_COMPONENT(c);
++      FttComponent v = FTT_ORTHOGONAL_COMPONENT(u);
++
++      FttDirection LEFT = 2*u+1;
++      FttDirection RIGHT = 2*u;
++      FttDirection UP = 2*v;
++      FttDirection DOWN = 2*v+1;
++
++      /* u direction first */
++      h[0] = neighboring_column (cell, hv, c, orientation, RIGHT, &x[0], &y[0]);
++      if (h[0] == GFS_NODATA || y[0] != 0.) continue;
++
++      h[1] = neighboring_column (cell, hv, c, orientation, LEFT, &x[1], &y[1]);
++      if (h[1] == GFS_NODATA || y[1] != 0.) continue;
++
++      gdouble hu = (h[0] - h[1]) / 2.;
++
++      /* v direction next */
++      h[0] = neighboring_column (cell, hv, c, orientation, UP, &x[0], &y[0]);
++      if (h[0] == GFS_NODATA || y[0] != 0.) continue;
++
++      h[1] = neighboring_column (cell, hv, c, orientation, DOWN, &x[1], &y[1]);
++      if (h[1] == GFS_NODATA || y[1] != 0.) continue;
++
++      gdouble hv = (h[0] - h[1]) / 2.;
++
++      gdouble s = 1. - 1. / sqrt(hu*hu + hv*hv + 1);
++      if ( s < slope )
++      {
++        slope = s;
++        (&m->x)[c] = orientation;
++        (&m->x)[u] = -hu;
++        (&m->x)[v] = -hv;
++      }
++    }
++  }
++
+ #endif /* 3D */
+   return slope < G_MAXDOUBLE;
+ }
+
+Context:
+
+[Fixed docs for sinking velocity
+Stephane Popinet <popinet@users.sf.net>**20131206130125
+ Ignore-this: 3f94b96adb8b6f56b44533053c0bd2bf
+] 
+[Fix for bubble cap example
+Stephane Popinet <popinet@users.sf.net>**20131206095310
+ Ignore-this: b5e9be0fe8cdd003681a36311965d539
+] 
+[New solver GfsAdvectionAxi
+Jose M. Lopez-Herrera Sanchez <jose.lopez.herrera.s@gmail.com>**20131120152117
+ Ignore-this: 3ce7dd3974880d4ba3fb713fd510fca4
+ Axisymmetric version of the solver GfsAdvection
+] 
+[Cosmetics
+Stephane Popinet <popinet@basilisk.fr>**20131129104951
+ Ignore-this: fb35a98d99d691ba662a702de4b8c651
+] 
+[sink velocity can be applied to VariableVOFConcentration
+Jose M. Lopez-Herrera Sanchez <jose.lopez.herrera.s@gmail.com>**20131127164705
+ Ignore-this: 886be3e9ed6a9cc5a8bae88a08ff0a2d
+] 
+[New test: unipolar injection in cylindrical
+Jose M. Lopez-Herrera Sanchez <jose.lopez.herrera.s@gmail.com>**20131127111911
+ Ignore-this: 3db853fb3596ca12c068b1e553e5ebac
+] 
+[sink velocities can be functions
+Jose M. Lopez-Herrera Sanchez <jose.lopez.herrera.s@gmail.com>**20131126105729
+ Ignore-this: b9665216dacc6c34d374787d2f406f99
+] 
+[TAG 2013-08-02
+Release**20130802035354
+ Ignore-this: 77b2eb11434c27b0637cadb58a9533ca
+] 
+[TAG 2013-08-01
+Release**20130802004908
+ Ignore-this: f35ae07dd56b0210b8d4308c7a4ca863
+] 
+[Fix for gfs-highlight
+Stephane Popinet <popinet@basilisk.fr>**20131129103558
+ Ignore-this: 471c639268df32f2bb5c917897d38101
+ 
+ It somehow didn't worh anymore with recent versions of source-highlight.
+] 
+[Rising bubble example
+Dustin Langewisch <dustinl@mit.edu>**20130803060931
+ Ignore-this: 5c1728a10bd294772e45bee5fe184bb9
+] 
+[Fix for 32-bits padding in kdt
+Stephane Popinet <s.popinet@gmail.com>**20130802015000
+ Ignore-this: 78f17cda79fda0c487022633fb7e14a3
+] 
+[Removed obsolete --partial darcs option
+Stephane Popinet <s.popinet@gmail.com>**20130802011625
+ Ignore-this: 66c4e32774dc8b6edd87a8ffb8bd4366
+] 
+[Updated Poisson tests references for new hypre version
+Stephane Popinet <popinet@users.sf.net>**20130801221638
+ Ignore-this: 2d896ac0f6ef99212a82b78fcfb12dce
+] 
+[Fluxes are reset properly
+Stephane Popinet <popinet@basilisk.fr>**20130801000121
+ Ignore-this: 28dca076e65e0b13bd9f46412712fe6e
+ 
+ The previous implementation could cause FPEs when trying to reuse
+ non-initialised invalid values.
+] 
+[New tool 'gfscombine'
+Stephane Popinet <s.popinet@gmail.com>**20120726234623
+ Ignore-this: 73e5e90fd5cd12fdaa18bd62b627a2ea
+] 
+[Fixed qsort() function call in kdt
+Stephane Popinet <popinet@basilisk.fr>**20130724023418
+ Ignore-this: 32ba4b55e5227225bcc9f83ea9f42074
+] 
+[Cosmetics
+Stephane Popinet <popinet@basilisk.fr>**20130724023201
+ Ignore-this: e9ee0ba2584f950b076c89487687174b
+] 
+[For VariableVOFConcentration face diffusion is set to zero
+Jose M. Lopez-Herrera Sanchez <jose.lopez.herrera.s@gmail.com>**20130220174915
+ Ignore-this: c267278ae6aedf39e1b53efd6cb7876a
+] 
+[New object gfs_vof_face_fraction
+Jose M. Lopez-Herrera Sanchez <jose.lopez.herrera.s@gmail.com>**20130118125427
+ Ignore-this: 413535c2a0360ca7a1bc3eb97c9f9cc6
+] 
+[Corrections to gfs_vof_face_value
+Jose M. Lopez-Herrera Sanchez <jose.lopez.herrera.s@gmail.com>**20130118122555
+ Ignore-this: 107cf63e8b4efc42fffc283b2fc4c784
+] 
+[TAG 2013-05-28
+Release**20130531065717] 
+[Updated field.awk for stratified lake case
+Stephane Popinet <s.popinet@gmail.com>**20130111032954
+ Ignore-this: 6b86d6d2e70762e5ebe927ca57e703c0
+] 
+[electric BC fixed
+Jose M. Lopez-Herrera Sanchez <jose.lopez.herrera.s@gmail.com>**20130528111034
+ Ignore-this: b5f19faeca25f632b83d4188f358e62b
+ 
+ This patch solve defective BC application in parallel runs
+] 
+[TAG 2013-01-12
+Release**20130112095727] 
+Patch bundle hash:
+6f49c93838dbbe9bf4b3db22f5f0e59341a331a5
